@@ -1,0 +1,937 @@
+{\rtf1\ansi\ansicpg1252\deff0\nouicompat\deflang11274{\fonttbl{\f0\fnil\fcharset0 Calibri;}}
+{\colortbl ;\red0\green0\blue255;}
+{\*\generator Riched20 10.0.22000}\viewkind4\uc1 
+\pard\sa200\sl276\slmult1\f0\fs22\lang10 CODIGO DE PROGRAMACION:\par
+\par
+\par
+\par
+[8:05, 16/11/2023] Juan Estevez: pico_i2c_lcd\par
+[8:05, 16/11/2023] Juan Estevez: import utime\par
+import gc\par
+\par
+from lcd_api import LcdApi\par
+from machine import I2C\par
+\par
+# PCF8574 pin definitions\par
+MASK_RS = 0x01       # P0\par
+MASK_RW = 0x02       # P1\par
+MASK_E  = 0x04       # P2\par
+\par
+SHIFT_BACKLIGHT = 3  # P3\par
+SHIFT_DATA      = 4  # P4-P7\par
+\par
+class I2cLcd(LcdApi):\par
+    \par
+    #Implements a HD44780 character LCD connected via PCF8574 on I2C\par
+\par
+    def _init_(self, i2c, i2c_addr, num_lines, num_columns):\par
+        self.i2c = i2c\par
+        self.i2c_addr = i2c0_addr\par
+        self.i2c.writeto(self.i2c_addr, bytes([0]))\par
+        utime.sleep_ms(20)   # Allow LCD time to powerup\par
+        # Send reset 3 times\par
+        self.hal_write_init_nibble(self.LCD_FUNCTION_RESET)\par
+        utime.sleep_ms(5)    # Need to delay at least 4.1 msec\par
+        self.hal_write_init_nibble(self.LCD_FUNCTION_RESET)\par
+        utime.sleep_ms(1)\par
+        self.hal_write_init_nibble(self.LCD_FUNCTION_RESET)\par
+        utime.sleep_ms(1)\par
+        # Put LCD into 4-bit mode\par
+        self.hal_write_init_nibble(self.LCD_FUNCTION)\par
+        utime.sleep_ms(1)\par
+        LcdApi._init_(self, num_lines, num_columns)\par
+        cmd = self.LCD_FUNCTION\par
+        if num_lines > 1:\par
+            cmd |= self.LCD_FUNCTION_2LINES\par
+        self.hal_write_command(cmd)\par
+        gc.collect()\par
+\par
+    def hal_write_init_nibble(self, nibble):\par
+        # Writes an initialization nibble to the LCD.\par
+        # This particular function is only used during initialization.\par
+        byte = ((nibble >> 4) & 0x0f) << SHIFT_DATA\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte | MASK_E]))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte]))\par
+        gc.collect()\par
+        \par
+    def hal_backlight_on(self):\par
+        # Allows the hal layer to turn the backlight on\par
+        self.i2c.writeto(self.i2c_addr, bytes([1 << SHIFT_BACKLIGHT]))\par
+        gc.collect()\par
+        \par
+    def hal_backlight_off(self):\par
+        #Allows the hal layer to turn the backlight off\par
+        self.i2c.writeto(self.i2c_addr, bytes([0]))\par
+        gc.collect()\par
+        \par
+    def hal_write_command(self, cmd):\par
+        # Write a command to the LCD. Data is latched on the falling edge of E.\par
+        byte = ((self.backlight << SHIFT_BACKLIGHT) |\par
+                (((cmd >> 4) & 0x0f) << SHIFT_DATA))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte | MASK_E]))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte]))\par
+        byte = ((self.backlight << SHIFT_BACKLIGHT) |\par
+                ((cmd & 0x0f) << SHIFT_DATA))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte | MASK_E]))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte]))\par
+        if cmd <= 3:\par
+            # The home and clear commands require a worst case delay of 4.1 msec\par
+            utime.sleep_ms(5)\par
+        gc.collect()\par
+\par
+    def hal_write_data(self, data):\par
+        # Write data to the LCD. Data is latched on the falling edge of E.\par
+        byte = (MASK_RS |\par
+                (self.backlight << SHIFT_BACKLIGHT) |\par
+                (((data >> 4) & 0x0f) << SHIFT_DATA))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte | MASK_E]))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte]))\par
+        byte = (MASK_RS |\par
+                (self.backlight << SHIFT_BACKLIGHT) |\par
+                ((data & 0x0f) << SHIFT_DATA))      \par
+        self.i2c.writeto(self.i2c_addr, bytes([byte | MASK_E]))\par
+        self.i2c.writeto(self.i2c_addr, bytes([byte]))\par
+        gc.collect()\par
+: lcd_api\par
+import time\par
+\par
+class LcdApi:\par
+    \par
+    # Implements the API for talking with HD44780 compatible character LCDs.\par
+    # This class only knows what commands to send to the LCD, and not how to get\par
+    # them to the LCD.\par
+    #\par
+    # It is expected that a derived class will implement the hal_xxx functions.\par
+    #\par
+    # The following constant names were lifted from the avrlib lcd.h header file,\par
+    # with bit numbers changed to bit masks.\par
+    \par
+    # HD44780 LCD controller command set\par
+    LCD_CLR             = 0x01  # DB0: clear display\par
+    LCD_HOME            = 0x02  # DB1: return to home position\par
+\par
+    LCD_ENTRY_MODE      = 0x04  # DB2: set entry mode\par
+    LCD_ENTRY_INC       = 0x02  # DB1: increment\par
+    LCD_ENTRY_SHIFT     = 0x01  # DB0: shift\par
+\par
+    LCD_ON_CTRL         = 0x08  # DB3: turn lcd/cursor on\par
+    LCD_ON_DISPLAY      = 0x04  # DB2: turn display on\par
+    LCD_ON_CURSOR       = 0x02  # DB1: turn cursor on\par
+    LCD_ON_BLINK        = 0x01  # DB0: blinking cursor\par
+\par
+    LCD_MOVE            = 0x10  # DB4: move cursor/display\par
+    LCD_MOVE_DISP       = 0x08  # DB3: move display (0-> move cursor)\par
+    LCD_MOVE_RIGHT      = 0x04  # DB2: move right (0-> left)\par
+\par
+    LCD_FUNCTION        = 0x20  # DB5: function set\par
+    LCD_FUNCTION_8BIT   = 0x10  # DB4: set 8BIT mode (0->4BIT mode)\par
+    LCD_FUNCTION_2LINES = 0x08  # DB3: two lines (0->one line)\par
+    LCD_FUNCTION_10DOTS = 0x04  # DB2: 5x10 font (0->5x7 font)\par
+    LCD_FUNCTION_RESET  = 0x30  # See "Initializing by Instruction" section\par
+\par
+    LCD_CGRAM           = 0x40  # DB6: set CG RAM address\par
+    LCD_DDRAM           = 0x80  # DB7: set DD RAM address\par
+\par
+    LCD_RS_CMD          = 0\par
+    LCD_RS_DATA         = 1\par
+\par
+    LCD_RW_WRITE        = 0\par
+    LCD_RW_READ         = 1\par
+\par
+    def _init_(self, num_lines, num_columns):\par
+        self.num_lines = num_lines\par
+        if self.num_lines > 4:\par
+            self.num_lines = 4\par
+        self.num_columns = num_columns\par
+        if self.num_columns > 40:\par
+            self.num_columns = 40\par
+        self.cursor_x = 0\par
+        self.cursor_y = 0\par
+        self.implied_newline = False\par
+        self.backlight = True\par
+        self.display_off()\par
+        self.backlight_on()\par
+        self.clear()\par
+        self.hal_write_command(self.LCD_ENTRY_MODE | self.LCD_ENTRY_INC)\par
+        self.hide_cursor()\par
+        self.display_on()\par
+\par
+    def clear(self):\par
+        # Clears the LCD display and moves the cursor to the top left corner\par
+        self.hal_write_command(self.LCD_CLR)\par
+        self.hal_write_command(self.LCD_HOME)\par
+        self.cursor_x = 0\par
+        self.cursor_y = 0\par
+\par
+    def show_cursor(self):\par
+        # Causes the cursor to be made visible\par
+        self.hal_write_command(self.LCD_ON_CTRL | self.LCD_ON_DISPLAY |\par
+                               self.LCD_ON_CURSOR)\par
+\par
+    def hide_cursor(self):\par
+        # Causes the cursor to be hidden\par
+        self.hal_write_command(self.LCD_ON_CTRL | self.LCD_ON_DISPLAY)\par
+\par
+    def blink_cursor_on(self):\par
+        # Turns on the cursor, and makes it blink\par
+        self.hal_write_command(self.LCD_ON_CTRL | self.LCD_ON_DISPLAY |\par
+                               self.LCD_ON_CURSOR | self.LCD_ON_BLINK)\par
+\par
+    def blink_cursor_off(self):\par
+        # Turns on the cursor, and makes it no blink (i.e. be solid)\par
+        self.hal_write_command(self.LCD_ON_CTRL | self.LCD_ON_DISPLAY |\par
+                               self.LCD_ON_CURSOR)\par
+\par
+    def display_on(self):\par
+        # Turns on (i.e. unblanks) the LCD\par
+        self.hal_write_command(self.LCD_ON_CTRL | self.LCD_ON_DISPLAY)\par
+\par
+    def display_off(self):\par
+        # Turns off (i.e. blanks) the LCD\par
+        self.hal_write_command(self.LCD_ON_CTRL)\par
+\par
+    def backlight_on(self):\par
+        # Turns the backlight on.\par
+        \par
+        # This isn't really an LCD command, but some modules have backlight\par
+        # controls, so this allows the hal to pass through the command.\par
+        self.backlight = True\par
+        self.hal_backlight_on()\par
+\par
+    def backlight_off(self):\par
+        # Turns the backlight off.\par
+\par
+        # This isn't really an LCD command, but some modules have backlight\par
+        # controls, so this allows the hal to pass through the command.\par
+        self.backlight = False\par
+        self.hal_backlight_off()\par
+\par
+    def move_to(self, cursor_x, cursor_y):\par
+        # Moves the cursor position to the indicated position. The cursor\par
+        # position is zero based (i.e. cursor_x == 0 indicates first column).\par
+        self.cursor_x = cursor_x\par
+        self.cursor_y = cursor_y\par
+        addr = cursor_x & 0x3f\par
+        if cursor_y & 1:\par
+            addr += 0x40    # Lines 1 & 3 add 0x40\par
+        if cursor_y & 2:    # Lines 2 & 3 add number of columns\par
+            addr += self.num_columns\par
+        self.hal_write_command(self.LCD_DDRAM | addr)\par
+\par
+    def putchar(self, char):\par
+        # Writes the indicated character to the LCD at the current cursor\par
+        # position, and advances the cursor by one position.\par
+        if char == '\\n':\par
+            if self.implied_newline:\par
+                # self.implied_newline means we advanced due to a wraparound,\par
+                # so if we get a newline right after that we ignore it.\par
+                pass\par
+            else:\par
+                self.cursor_x = self.num_columns\par
+        else:\par
+            self.hal_write_data(ord(char))\par
+            self.cursor_x += 1\par
+        if self.cursor_x >= self.num_columns:\par
+            self.cursor_x = 0\par
+            self.cursor_y += 1\par
+            self.implied_newline = (char != '\\n')\par
+        if self.cursor_y >= self.num_lines:\par
+            self.cursor_y = 0\par
+        self.move_to(self.cursor_x, self.cursor_y)\par
+\par
+    def putstr(self, string):\par
+        # Write the indicated string to the LCD at the current cursor\par
+        # position and advances the cursor position appropriately.\par
+        for char in string:\par
+            self.putchar(char)\par
+\par
+    def custom_char(self, location, charmap):\par
+        # Write a character to one of the 8 CGRAM locations, available\par
+        # as chr(0) through chr(7).\par
+        location &= 0x7\par
+        self.hal_write_command(self.LCD_CGRAM | (location << 3))\par
+        self.hal_sleep_us(40)\par
+        for i in range(8):\par
+            self.hal_write_data(charmap[i])\par
+            self.hal_sleep_us(40)\par
+        self.move_to(self.cursor_x, self.cursor_y)\par
+\par
+    def hal_backlight_on(self):\par
+        # Allows the hal layer to turn the backlight on.\par
+        # If desired, a derived HAL class will implement this function.\par
+        pass\par
+\par
+    def hal_backlight_off(self):\par
+        # Allows the hal layer to turn the backlight off.\par
+        # If desired, a derived HAL class will implement this function.\par
+        pass\par
+\par
+    def hal_write_command(self, cmd):\par
+        # Write a command to the LCD.\par
+        # It is expected that a derived HAL class will implement this function.\par
+        raise NotImplementedError\par
+\par
+    def hal_write_data(self, data):\par
+        # Write data to the LCD.\par
+        # It is expected that a derived HAL class will implement this function.\par
+        raise NotImplementedError\par
+\par
+    def hal_sleep_us(self, usecs):\par
+        # Sleep for some time (given in microseconds)\par
+        time.sleep_us(usecs)\par
+: # imu.py MicroPython driver for the InvenSense inertial measurement units\par
+# This is the base class\par
+# Adapted from Sebastian Plamauer's MPU9150 driver:\par
+# {{\field{\*\fldinst{HYPERLINK https://github.com/micropython-IMU/micropython-mpu9150.git }}{\fldrslt{https://github.com/micropython-IMU/micropython-mpu9150.git\ul0\cf0}}}}\f0\fs22\par
+# Authors Peter Hinch, Sebastian Plamauer\par
+# V0.2 17th May 2017 Platform independent: utime and machine replace pyb\par
+\par
+'''\par
+mpu9250 is a micropython module for the InvenSense MPU9250 sensor.\par
+It measures acceleration, turn rate and the magnetic field in three axis.\par
+mpu9150 driver modified for the MPU9250 by Peter Hinch\par
+\par
+The MIT License (MIT)\par
+Copyright (c) 2014 Sebastian Plamauer, oeplse@gmail.com, Peter Hinch\par
+Permission is hereby granted, free of charge, to any person obtaining a copy\par
+of this software and associated documentation files (the "Software"), to deal\par
+in the Software without restriction, including without limitation the rights\par
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\par
+copies of the Software, and to permit persons to whom the Software is\par
+furnished to do so, subject to the following conditions:\par
+The above copyright notice and this permission notice shall be included in\par
+all copies or substantial portions of the Software.\par
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\par
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\par
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\par
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\par
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\par
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\par
+THE SOFTWARE.\par
+'''\par
+\par
+# User access is now by properties e.g.\par
+# myimu = MPU9250('X')\par
+# magx = myimu.mag.x\par
+# accelxyz = myimu.accel.xyz\par
+# Error handling: on code used for initialisation, abort with message\par
+# At runtime try to continue returning last good data value. We don't want aircraft\par
+# crashing. However if the I2C has crashed we're probably stuffed.\par
+\par
+from utime import sleep_ms\par
+from machine import I2C\par
+from vector3d import Vector3d\par
+\par
+\par
+class MPUException(OSError):\par
+    '''\par
+    Exception for MPU devices\par
+    '''\par
+    pass\par
+\par
+\par
+def bytes_toint(msb, lsb):\par
+    '''\par
+    Convert two bytes to signed integer (big endian)\par
+    for little endian reverse msb, lsb arguments\par
+    Can be used in an interrupt handler\par
+    '''\par
+    if not msb & 0x80:\par
+        return msb << 8 | lsb  # +ve\par
+    return - (((msb ^ 255) << 8) | (lsb ^ 255) + 1)\par
+\par
+\par
+class MPU6050(object):\par
+    '''\par
+    Module for InvenSense IMUs. Base class implements MPU6050 6DOF sensor, with\par
+    features common to MPU9150 and MPU9250 9DOF sensors.\par
+    '''\par
+\par
+    _I2Cerror = "I2C failure when communicating with IMU"\par
+    _mpu_addr = (104, 105)  # addresses of MPU9150/MPU6050. There can be two devices\par
+    _chip_id = 104\par
+\par
+    def _init_(self, side_str, device_addr=None, transposition=(0, 1, 2), scaling=(1, 1, 1)):\par
+\par
+        self._accel = Vector3d(transposition, scaling, self._accel_callback)\par
+        self._gyro = Vector3d(transposition, scaling, self._gyro_callback)\par
+        self.buf1 = bytearray(1)                # Pre-allocated buffers for reads: allows reads to\par
+        self.buf2 = bytearray(2)                # be done in interrupt handlers\par
+        self.buf3 = bytearray(3)\par
+        self.buf6 = bytearray(6)\par
+\par
+        sleep_ms(200)                           # Ensure PSU and device have settled\par
+        if isinstance(side_str, str):           # Non-pyb targets may use other than X or Y\par
+            self._mpu_i2c = I2C(side_str)\par
+        elif hasattr(side_str, 'readfrom'):     # Soft or hard I2C instance. See issue #3097\par
+            self._mpu_i2c = side_str\par
+        else:\par
+            raise ValueError("Invalid I2C instance")\par
+\par
+        if device_addr is None:\par
+            devices = set(self._mpu_i2c.scan())\par
+            mpus = devices.intersection(set(self._mpu_addr))\par
+            number_of_mpus = len(mpus)\par
+            if number_of_mpus == 0:\par
+                raise MPUException("No MPU's detected")\par
+            elif number_of_mpus == 1:\par
+                self.mpu_addr = mpus.pop()\par
+            else:\par
+                raise ValueError("Two MPU's detected: must specify a device address")\par
+        else:\par
+            if device_addr not in (0, 1):\par
+                raise ValueError('Device address must be 0 or 1')\par
+            self.mpu_addr = self._mpu_addr[device_addr]\par
+\par
+        self.chip_id                     # Test communication by reading chip_id: throws exception on error\par
+        # Can communicate with chip. Set it up.\par
+        self.wake()                             # wake it up\par
+        self.passthrough = True                 # Enable mag access from main I2C bus\par
+        self.accel_range = 0                    # default to highest sensitivity\par
+        self.gyro_range = 0                     # Likewise for gyro\par
+\par
+    # read from device\par
+    def _read(self, buf, memaddr, addr):        # addr = I2C device address, memaddr = memory location within the I2C device\par
+        '''\par
+        Read bytes to pre-allocated buffer Caller traps OSError.\par
+        '''\par
+        self._mpu_i2c.readfrom_mem_into(addr, memaddr, buf)\par
+\par
+    # write to device\par
+    def _write(self, data, memaddr, addr):\par
+        '''\par
+        Perform a memory write. Caller should trap OSError.\par
+        '''\par
+        self.buf1[0] = data\par
+        self._mpu_i2c.writeto_mem(addr, memaddr, self.buf1)\par
+\par
+    # wake\par
+    def wake(self):\par
+        '''\par
+        Wakes the device.\par
+        '''\par
+        try:\par
+            self._write(0x01, 0x6B, self.mpu_addr)  # Use best clock source\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        return 'awake'\par
+\par
+    # mode\par
+    def sleep(self):\par
+        '''\par
+        Sets the device to sleep mode.\par
+        '''\par
+        try:\par
+            self._write(0x40, 0x6B, self.mpu_addr)\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        return 'asleep'\par
+\par
+    # chip_id\par
+    @property\par
+    def chip_id(self):\par
+        '''\par
+        Returns Chip ID\par
+        '''\par
+        try:\par
+            self._read(self.buf1, 0x75, self.mpu_addr)\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        chip_id = int(self.buf1[0])\par
+        if chip_id != self._chip_id:\par
+            raise ValueError('Bad chip ID retrieved: MPU communication failure')\par
+        return chip_id\par
+\par
+    @property\par
+    def sensors(self):\par
+        '''\par
+        returns sensor objects accel, gyro\par
+        '''\par
+        return self._accel, self._gyro\par
+\par
+    # get temperature\par
+    @property\par
+    def temperature(self):\par
+        '''\par
+        Returns the temperature in degree C.\par
+        '''\par
+        try:\par
+            self._read(self.buf2, 0x41, self.mpu_addr)\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        return bytes_toint(self.buf2[0], self.buf2[1])/340 + 35  # I think\par
+\par
+    # passthrough\par
+    @property\par
+    def passthrough(self):\par
+        '''\par
+        Returns passthrough mode True or False\par
+        '''\par
+        try:\par
+            self._read(self.buf1, 0x37, self.mpu_addr)\par
+            return self.buf1[0] & 0x02 > 0\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+\par
+    @passthrough.setter\par
+    def passthrough(self, mode):\par
+        '''\par
+        Sets passthrough mode True or False\par
+        '''\par
+        if type(mode) is bool:\par
+            val = 2 if mode else 0\par
+            try:\par
+                self._write(val, 0x37, self.mpu_addr)  # I think this is right.\par
+                self._write(0x00, 0x6A, self.mpu_addr)\par
+            except OSError:\par
+                raise MPUException(self._I2Cerror)\par
+        else:\par
+            raise ValueError('pass either True or False')\par
+\par
+    # sample rate. Not sure why you'd ever want to reduce this from the default.\par
+    @property\par
+    def sample_rate(self):\par
+        '''\par
+        Get sample rate as per Register Map document section 4.4\par
+        SAMPLE_RATE= Internal_Sample_Rate / (1 + rate)\par
+        default rate is zero i.e. sample at internal rate.\par
+        '''\par
+        try:\par
+            self._read(self.buf1, 0x19, self.mpu_addr)\par
+            return self.buf1[0]\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+\par
+    @sample_rate.setter\par
+    def sample_rate(self, rate):\par
+        '''\par
+        Set sample rate as per Register Map document section 4.4\par
+        '''\par
+        if rate < 0 or rate > 255:\par
+            raise ValueError("Rate must be in range 0-255")\par
+        try:\par
+            self._write(rate, 0x19, self.mpu_addr)\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+\par
+    # Low pass filters. Using the filter_range property of the MPU9250 is\par
+    # harmless but gyro_filter_range is preferred and offers an extra setting.\par
+    @property\par
+    def filter_range(self):\par
+        '''\par
+        Returns the gyro and temperature sensor low pass filter cutoff frequency\par
+        Pass:               0   1   2   3   4   5   6\par
+        Cutoff (Hz):        250 184 92  41  20  10  5\par
+        Sample rate (KHz):  8   1   1   1   1   1   1\par
+        '''\par
+        try:\par
+            self._read(self.buf1, 0x1A, self.mpu_addr)\par
+            res = self.buf1[0] & 7\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        return res\par
+\par
+    @filter_range.setter\par
+    def filter_range(self, filt):\par
+        '''\par
+        Sets the gyro and temperature sensor low pass filter cutoff frequency\par
+        Pass:               0   1   2   3   4   5   6\par
+        Cutoff (Hz):        250 184 92  41  20  10  5\par
+        Sample rate (KHz):  8   1   1   1   1   1   1\par
+        '''\par
+        # set range\par
+        if filt in range(7):\par
+            try:\par
+                self._write(filt, 0x1A, self.mpu_addr)\par
+            except OSError:\par
+                raise MPUException(self._I2Cerror)\par
+        else:\par
+            raise ValueError('Filter coefficient must be between 0 and 6')\par
+\par
+    # accelerometer range\par
+    @property\par
+    def accel_range(self):\par
+        '''\par
+        Accelerometer range\par
+        Value:              0   1   2   3\par
+        for range +/-:      2   4   8   16  g\par
+        '''\par
+        try:\par
+            self._read(self.buf1, 0x1C, self.mpu_addr)\par
+            ari = self.buf1[0]//8\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        return ari\par
+\par
+    @accel_range.setter\par
+    def accel_range(self, accel_range):\par
+        '''\par
+        Set accelerometer range\par
+        Pass:               0   1   2   3\par
+        for range +/-:      2   4   8   16  g\par
+        '''\par
+        ar_bytes = (0x00, 0x08, 0x10, 0x18)\par
+        if accel_range in range(len(ar_bytes)):\par
+            try:\par
+                self._write(ar_bytes[accel_range], 0x1C, self.mpu_addr)\par
+            except OSError:\par
+                raise MPUException(self._I2Cerror)\par
+        else:\par
+            raise ValueError('accel_range can only be 0, 1, 2 or 3')\par
+\par
+    # gyroscope range\par
+    @property\par
+    def gyro_range(self):\par
+        '''\par
+        Gyroscope range\par
+        Value:              0   1   2    3\par
+        for range +/-:      250 500 1000 2000  degrees/second\par
+        '''\par
+        # set range\par
+        try:\par
+            self._read(self.buf1, 0x1B, self.mpu_addr)\par
+            gri = self.buf1[0]//8\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        return gri\par
+\par
+    @gyro_range.setter\par
+    def gyro_range(self, gyro_range):\par
+        '''\par
+        Set gyroscope range\par
+        Pass:               0   1   2    3\par
+        for range +/-:      250 500 1000 2000  degrees/second\par
+        '''\par
+        gr_bytes = (0x00, 0x08, 0x10, 0x18)\par
+        if gyro_range in range(len(gr_bytes)):\par
+            try:\par
+                self._write(gr_bytes[gyro_range], 0x1B, self.mpu_addr)  # Sets fchoice = b11 which enables filter\par
+            except OSError:\par
+                raise MPUException(self._I2Cerror)\par
+        else:\par
+            raise ValueError('gyro_range can only be 0, 1, 2 or 3')\par
+\par
+    # Accelerometer\par
+    @property\par
+    def accel(self):\par
+        '''\par
+        Acceleremoter object\par
+        '''\par
+        return self._accel\par
+\par
+    def _accel_callback(self):\par
+        '''\par
+        Update accelerometer Vector3d object\par
+        '''\par
+        try:\par
+            self._read(self.buf6, 0x3B, self.mpu_addr)\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        self._accel._ivector[0] = bytes_toint(self.buf6[0], self.buf6[1])\par
+        self._accel._ivector[1] = bytes_toint(self.buf6[2], self.buf6[3])\par
+        self._accel._ivector[2] = bytes_toint(self.buf6[4], self.buf6[5])\par
+        scale = (16384, 8192, 4096, 2048)\par
+        self._accel._vector[0] = self._accel._ivector[0]/scale[self.accel_range]\par
+        self._accel._vector[1] = self._accel._ivector[1]/scale[self.accel_range]\par
+        self._accel._vector[2] = self._accel._ivector[2]/scale[self.accel_range]\par
+\par
+    def get_accel_irq(self):\par
+        '''\par
+        For use in interrupt handlers. Sets self._accel._ivector[] to signed\par
+        unscaled integer accelerometer values\par
+        '''\par
+        self._read(self.buf6, 0x3B, self.mpu_addr)\par
+        self._accel._ivector[0] = bytes_toint(self.buf6[0], self.buf6[1])\par
+        self._accel._ivector[1] = bytes_toint(self.buf6[2], self.buf6[3])\par
+        self._accel._ivector[2] = bytes_toint(self.buf6[4], self.buf6[5])\par
+\par
+    # Gyro\par
+    @property\par
+    def gyro(self):\par
+        '''\par
+        Gyroscope object\par
+        '''\par
+        return self._gyro\par
+\par
+    def _gyro_callback(self):\par
+        '''\par
+        Update gyroscope Vector3d object\par
+        '''\par
+        try:\par
+            self._read(self.buf6, 0x43, self.mpu_addr)\par
+        except OSError:\par
+            raise MPUException(self._I2Cerror)\par
+        self._gyro._ivector[0] = bytes_toint(self.buf6[0], self.buf6[1])\par
+        self._gyro._ivector[1] = bytes_toint(self.buf6[2], self.buf6[3])\par
+        self._gyro._ivector[2] = bytes_toint(self.buf6[4], self.buf6[5])\par
+        scale = (131, 65.5, 32.8, 16.4)\par
+        self._gyro._vector[0] = self._gyro._ivector[0]/scale[self.gyro_range]\par
+        self._gyro._vector[1] = self._gyro._ivector[1]/scale[self.gyro_range]\par
+        self._gyro._vector[2] = self._gyro._ivector[2]/scale[self.gyro_range]\par
+\par
+    def get_gyro_irq(self):\par
+        '''\par
+        For use in interrupt handlers. Sets self._gyro._ivector[] to signed\par
+        unscaled integer gyro values. Error trapping disallowed.\par
+        '''\par
+        self._read(self.buf6, 0x43, self.mpu_addr)\par
+        self._gyro._ivector[0] = bytes_toint(self.buf6[0], self.buf6[1])\par
+        self._gyro._ivector[1] = bytes_toint(self.buf6[2], self.buf6[3])\par
+        self._gyro._ivector[2] = bytes_toint(self.buf6[4], self.buf6[5])\par
+[8:06, 16/11/2023] Juan Estevez: mpu9250\par
+[8:06, 16/11/2023] Juan Estevez: # mpu9250.py MicroPython driver for the InvenSense MPU9250 inertial measurement unit\par
+# Authors Peter Hinch, Sebastian Plamauer\par
+# V0.5 17th June 2015\par
+\par
+'''\par
+mpu9250 is a micropython module for the InvenSense MPU9250 sensor.\par
+It measures acceleration, turn rate and the magnetic field in three axis.\par
+\par
+The MIT License (MIT)\par
+Copyright (c) 2014 Sebastian Plamauer, oeplse@gmail.com, Peter Hinch\par
+Permission is hereby granted, free of charge, to any person obtaining a copy\par
+of this software and associated documentation files (the "Software"), to deal\par
+in the Software without restriction, including without limitation the rights\par
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\par
+copies of the Software, and to permit persons to whom the Software is\par
+furni\'85\par
+[8:06, 16/11/2023] Juan Estevez: MPU9255\par
+[8:07, 16/11/2023] Juan Estevez: # mpu9255.py MicroPython driver for the InvenSense MPU9255 inertial measurement unit\par
+# Authors Peter Hinch, Sebastian Plamauer\par
+# V0.1 7th October 2022\par
+\par
+'''\par
+mpu9255 is a micropython module for the InvenSense MPU9255 sensor.\par
+It measures acceleration, turn rate and the magnetic field in three axis.\par
+The MPU9255 sensor is functionally equivalent to the MPU9250 except for the\par
+device ID or chip ID which is 0x73.\par
+\par
+The MIT License (MIT)\par
+Copyright (c) 2014 Sebastian Plamauer, oeplse@gmail.com, Peter Hinch\par
+Permission is hereby granted, free of charge, to any person obtaining a copy\par
+of this software and associated documentation files (the "Software"), to deal\par
+in the Software without restriction, including without limitation the rights\par
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\par
+copies of the Software, and to permit persons to whom the Software is\par
+furnished to do so, subject to the following conditions:\par
+The above copyright notice and this permission notice shall be included in\par
+all copies or substantial portions of the Software.\par
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\par
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\par
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\par
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\par
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\par
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\par
+THE SOFTWARE.\par
+'''\par
+\par
+from mpu9250 import MPU9250\par
+\par
+\par
+class MPU9255(MPU9250):\par
+    _chip_id = 0x73\par
+: # vector3d.py 3D vector class for use in inertial measurement unit drivers\par
+# Authors Peter Hinch, Sebastian Plamauer\par
+\par
+# V0.7 17th May 2017 pyb replaced with utime\par
+# V0.6 18th June 2015\par
+\par
+'''\par
+The MIT License (MIT)\par
+Copyright (c) 2014 Sebastian Plamauer, oeplse@gmail.com, Peter Hinch\par
+Permission is hereby granted, free of charge, to any person obtaining a copy\par
+of this software and associated documentation files (the "Software"), to deal\par
+in the Software without restriction, including without limitation the rights\par
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\par
+copies of the Software, and to permit persons to whom the Software is\par
+furnished to do so, subject to the following conditions:\par
+The above copyright notice and this permission notice shall be included in\par
+all copies or substantial portions of the Software.\par
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\par
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\par
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\par
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\par
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\par
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\par
+THE SOFTWARE.\par
+'''\par
+\par
+from utime import sleep_ms\par
+from math import sqrt, degrees, acos, atan2\par
+\par
+\par
+def default_wait():\par
+    '''\par
+    delay of 50 ms\par
+    '''\par
+    sleep_ms(50)\par
+\par
+\par
+class Vector3d(object):\par
+    '''\par
+    Represents a vector in a 3D space using Cartesian coordinates.\par
+    Internally uses sensor relative coordinates.\par
+    Returns vehicle-relative x, y and z values.\par
+    '''\par
+    def _init_(self, transposition, scaling, update_function):\par
+        self._vector = [0, 0, 0]\par
+        self._ivector = [0, 0, 0]\par
+        self.cal = (0, 0, 0)\par
+        self.argcheck(transposition, "Transposition")\par
+        self.argcheck(scaling, "Scaling")\par
+        if set(transposition) != \{0, 1, 2\}:\par
+            raise ValueError('Transpose indices must be unique and in range 0-2')\par
+        self._scale = scaling\par
+        self._transpose = transposition\par
+        self.update = update_function\par
+\par
+    def argcheck(self, arg, name):\par
+        '''\par
+        checks if arguments are of correct length\par
+        '''\par
+        if len(arg) != 3 or not (type(arg) is list or type(arg) is tuple):\par
+            raise ValueError(name + ' must be a 3 element list or tuple')\par
+\par
+    def calibrate(self, stopfunc, waitfunc=default_wait):\par
+        '''\par
+        calibration routine, sets cal\par
+        '''\par
+        self.update()\par
+        maxvec = self._vector[:]                # Initialise max and min lists with current values\par
+        minvec = self._vector[:]\par
+        while not stopfunc():\par
+            waitfunc()\par
+            self.update()\par
+            maxvec = list(map(max, maxvec, self._vector))\par
+            minvec = list(map(min, minvec, self._vector))\par
+        self.cal = tuple(map(lambda a, b: (a + b)/2, maxvec, minvec))\par
+\par
+    @property\par
+    def _calvector(self):\par
+        '''\par
+        Vector adjusted for calibration offsets\par
+        '''\par
+        return list(map(lambda val, offset: val - offset, self._vector, self.cal))\par
+\par
+    @property\par
+    def x(self):                                # Corrected, vehicle relative floating point values\par
+        self.update()\par
+        return self._calvector[self._transpose[0]] * self._scale[0]\par
+\par
+    @property\par
+    def y(self):\par
+        self.update()\par
+        return self._calvector[self._transpose[1]] * self._scale[1]\par
+\par
+    @property\par
+    def z(self):\par
+        self.update()\par
+        return self._calvector[self._transpose[2]] * self._scale[2]\par
+\par
+    @property\par
+    def xyz(self):\par
+        self.update()\par
+        return (self._calvector[self._transpose[0]] * self._scale[0],\par
+                self._calvector[self._transpose[1]] * self._scale[1],\par
+                self._calvector[self._transpose[2]] *\'85\par
+[8:07, 16/11/2023] Juan Estevez: Main\par
+[8:07, 16/11/2023] Juan Estevez: from machine import I2C, Pin, PWM\par
+from mpu9255 import MPU9255\par
+from time import sleep\par
+from lcd_api import LcdApi\par
+from pico_i2c_lcd import I2cLcd\par
+\par
+\par
+I2C_ADDR     = 39\par
+I2C_NUM_ROWS = 2\par
+I2C_NUM_COLS = 16\par
+i2c = I2C(0, sda=machine.Pin(0), scl=machine.Pin(1), freq=400000)\par
+lcd = I2cLcd(i2c, I2C_ADDR, I2C_NUM_ROWS, I2C_NUM_COLS)\par
+\par
+i2c0 = I2C(1, scl=Pin(3), sda=Pin(2))\par
+\par
+imu = MPU9255(i2c0)\par
+\par
+frequency = 10000\par
+motor = PWM(Pin(17))\par
+motor.freq(frequency)\par
+sentido1 = Pin(9, Pin.OUT)\par
+sentido2 = Pin(8, Pin.OUT)\par
+\par
+setpoint = 1.2\par
+\par
+Potencia = 30000\par
+\par
+def greeting():\par
+    \par
+    lcd.clear()\par
+    lcd.move_to(2,0)\par
+    lcd.putstr("Bienvenido")\par
+    sleep(2)\par
+    lcd.clear()\par
+    lcd.move_to(1,0)\par
+    lcd.putstr("Maquina de GYM")\par
+    lcd.move_to(3,1)\par
+    lcd.putstr("0800-Tonel")\par
+    sleep(2)\par
+    lcd.clear()\par
+    \par
+greeting()\par
+lcd.move_to(1,0)\par
+lcd.putstr("Peso aplicado")\par
+\par
+while True:\par
+  ax = imu.accel.x\par
+  ay = imu.accel.y\par
+  az = imu.accel.z\par
+  gx = imu.gyro.x\par
+  gy = imu.gyro.y\par
+  gz = imu.gyro.z\par
+  t = imu.temperature\par
+  \par
+  #print("ax:", ax, "ay: ", ay, "az:", az)\par
+  #print("gx:", gx, "gy: ", gy, "gz:", gz)\par
+  #print("temp:", t)\par
+  sleep(0.1)\par
+  i = 1\par
+  suma = 0\par
+  while (i<=3):\par
+      valmed = imu.accel.z\par
+      if (valmed < 0):\par
+          valmed = valmed * -1\par
+      suma = suma + valmed\par
+      #print("valor medido:", valmed)\par
+      i+=1\par
+      sleep(0.1)\par
+  prom = suma / 3\par
+  #print("el valor medido es de:",prom)\par
+  \par
+  error = prom - setpoint\par
+  k = 7.0\par
+  \par
+  cont_prop = k * error\par
+  print("error =", cont_prop)\par
+  if (cont_prop < -2):\par
+      Potencia = Potencia - 1000\par
+  elif (cont_prop > -1.4):\par
+      Potencia = Potencia + 2000\par
+      if (cont_prop > 1.4):\par
+          Potencia = Potencia + 5000\par
+  if (Potencia < 0):\par
+      Potencia = 0\par
+  elif (Potencia > 65000):\par
+      Potencia = 65000\par
+ \par
+  motor.duty_u16(Potencia)\par
+  sentido1.value(1)\par
+  sentido2.value(0)\par
+      \par
+      \par
+  peso_apli = Potencia * 0.000061538 + 3\par
+  #print("cantidad de pulsos:", Potencia)\par
+  fomratted_peso_apli = "\{:.2f\}".format(peso_apli)\par
+  #print(fomratted_valmed)\par
+  lcd.move_to(5,1)\par
+  lcd.putstr(fomratted_peso_apli + "Kg")\par
+}
+ 
